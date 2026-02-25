@@ -1,5 +1,14 @@
 """
 Training loop for SAC-based adversarial LED pattern optimization.
+
+Key change vs. original:
+  The SAC agent no longer predicts N_LEDS*3 = 29 184 values directly.
+  Instead it works in the latent space of a pretrained SD VAE:
+
+      state → SAC Actor → latent (624,) → VAE Decoder → LED pattern (29 184,)
+
+  The VAE is fully frozen. Only the SAC actor/critic are trained.
+  Compression ratio: ~47×  (29 184 → 624)
 """
 
 import json
@@ -12,6 +21,7 @@ import torch
 
 from config import TrainingConfig as cfg
 from env import AdversarialJacketEnv
+from led_latent import LEDPatternCodec, LATENT_DIM        # ← NEW
 from models import ImageEncoder, SACAgent
 
 
@@ -24,24 +34,31 @@ def train():
     device = torch.device(cfg.DEVICE if torch.cuda.is_available() else 'cpu')
     print(f"[INFO] Device: {device}")
 
-    # -- Encoder --
+    # -- Pretrained VAE codec (frozen) -----------------------------------------
+    print("[INFO] Loading pretrained LED pattern VAE codec...")
+    codec = LEDPatternCodec(device)
+    # action_dim for SAC is now the VAE latent dimension, not N_LEDS*3
+    action_dim = LATENT_DIM                                   # 624  (was 29 184)
+    print(f"[INFO] SAC action_dim = {action_dim}  "
+          f"(was {cfg.N_LEDS * 3}, {cfg.N_LEDS * 3 / action_dim:.0f}× compression)")
+
+    # -- Image encoder ----------------------------------------------------------
     print("[INFO] Loading MobileNetV2 encoder...")
     encoder = ImageEncoder(output_dim=cfg.ENCODER_DIM, freeze=cfg.ENCODER_FREEZE).to(device)
     encoder.eval()
     print(f"[INFO] Encoder ready. state_dim = {cfg.ENCODER_DIM} x 2 = {cfg.ENCODER_DIM * 2}")
 
-    # -- Environment --
+    # -- Environment ------------------------------------------------------------
     env = AdversarialJacketEnv(cfg, encoder=encoder)
     if not env.connect_to_rpi():
         print("[ERROR] Failed to connect to RPi. Aborting.")
         return
 
-    state_dim  = cfg.ENCODER_DIM * 2
-    action_dim = cfg.N_LEDS * 3
+    state_dim = cfg.ENCODER_DIM * 2
     print(f"[INFO] state_dim={state_dim}, action_dim={action_dim}")
 
-    # -- Agent --
-    print("[INFO] Initializing SAC agent...")
+    # -- SAC agent (operates in latent space) -----------------------------------
+    print("[INFO] Initializing SAC agent in latent space...")
     agent = SACAgent(state_dim, action_dim, device, cfg)
     print("[INFO] SAC agent ready.")
 
@@ -53,7 +70,7 @@ def train():
     )
 
     print("\n" + "=" * 70)
-    print("TRAINING START")
+    print("TRAINING START  (latent-space SAC + pretrained VAE decoder)")
     print("=" * 70 + "\n")
 
     state, raw_images = env.reset()
@@ -68,9 +85,15 @@ def train():
         episode_detection = 0.0
 
         for step in range(cfg.MAX_STEPS_PER_EPISODE):
-            action = agent.select_action(state)
 
-            reward, done, info = env.step(action, episode=episode, step_num=step)
+            # 1. SAC selects a latent code  (shape: (LATENT_DIM,), values in [-1,1])
+            latent_action = agent.select_action(state)
+
+            # 2. Decode latent → full LED pattern  (shape: (N_LEDS*3,), values in [0,1])
+            led_pattern = codec.decode(latent_action)
+
+            # 3. Send real pattern to RPi, get reward
+            reward, done, info = env.step(led_pattern, episode=episode, step_num=step)
             if info is None:
                 print("[ERROR] Step failed.")
                 break
@@ -84,20 +107,23 @@ def train():
                 done = True
                 break
 
-            agent.replay_buffer.push(state, action, reward, next_state, done)
+            # 4. Store *latent* action in replay buffer (not the raw LED pattern)
+            agent.replay_buffer.push(state, latent_action, reward, next_state, done)
 
             if done:
                 break
 
+            # 5. Update SAC
             if len(agent.replay_buffer) >= cfg.LEARNING_STARTS:
                 critic_loss, actor_loss, alpha_loss = agent.update(cfg.BATCH_SIZE)
                 if critic_loss is not None and cfg.VERBOSE:
                     print(f"  [TRAIN] critic={critic_loss:.4f}  "
                           f"actor={actor_loss:.4f}  alpha={alpha_loss:.4f}")
 
+            # 6. Optionally save dataset
             if cfg.SAVE_DATASET and raw_images is not None:
                 _save_dataset_step(
-                    episode, step, raw_images, info, action,
+                    episode, step, raw_images, info, latent_action,
                     episode_detection, reward, env
                 )
 
@@ -129,7 +155,8 @@ def train():
     print("=" * 70)
 
 
-def _save_dataset_step(episode, step, raw_images, info, action, detection, reward, env):
+def _save_dataset_step(episode, step, raw_images, info, latent_action,
+                       detection, reward, env):
     """Save images and metadata for a single training step."""
     ep_dir = os.path.join(cfg.DATASET_DIR, f'episode_{episode:05d}')
     os.makedirs(ep_dir, exist_ok=True)
@@ -146,8 +173,11 @@ def _save_dataset_step(episode, step, raw_images, info, action, detection, rewar
         'step':                 step,
         'detection_confidence': float(detection),
         'reward':               float(reward),
-        'action_mean':          float(action.mean()),
-        'action_std':           float(action.std()),
+        # Store latent stats instead of full pattern
+        'latent_mean':          float(latent_action.mean()),
+        'latent_std':           float(latent_action.std()),
+        'latent_min':           float(latent_action.min()),
+        'latent_max':           float(latent_action.max()),
     }
     with open(os.path.join(ep_dir, 'metadata.json'), 'w') as f:
         json.dump(metadata, f, indent=2)

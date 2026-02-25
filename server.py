@@ -145,8 +145,8 @@ def run_server():
     print("RASPBERRY PI SERVER")
     print("=" * 70)
 
-    led_controller = LEDController(simulate=False)
-    env_camera     = EnvironmentCamera(simulate=False)
+    led_controller = LEDController(simulate=True)
+    env_camera     = EnvironmentCamera(simulate=True)
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
