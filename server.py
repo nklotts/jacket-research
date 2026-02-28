@@ -1,10 +1,10 @@
 """
-TCP server for Raspberry Pi.
-Responsibilities:
-  1. Send two environment images to the PC client
-  2. Receive LED pattern from the PC client
-  3. Render the pattern on LEDs (GPIO or simulation)
-  4. Send confirmation back to the client
+TCP сервер для Raspberry Pi / Orange Pi.
+Обязанности:
+  1. Отправить два изображения окружения клиенту (ПК)
+  2. Принять LED-паттерн от клиента
+  3. Отрисовать паттерн на диодах (GPIO или симуляция)
+  4. Отправить подтверждение клиенту
 """
 
 import os
@@ -18,7 +18,7 @@ import numpy as np
 
 
 # =============================================================================
-# CONFIGURATION
+# КОНФИГУРАЦИЯ
 # =============================================================================
 class ServerConfig:
     HOST = '0.0.0.0'
@@ -27,11 +27,11 @@ class ServerConfig:
     IMAGE1_PATH = 'img/image1.jpg'
     IMAGE2_PATH = 'img/image2.jpg'
 
-    SIMULATE_LED_RENDER_TIME = 0.5   # seconds
+    SIMULATE_LED_RENDER_TIME = 0.5   # секунд
 
 
 # =============================================================================
-# SOCKET UTILITIES
+# УТИЛИТЫ СОКЕТА
 # =============================================================================
 def send_data(conn: socket.socket, data) -> bool:
     try:
@@ -39,7 +39,7 @@ def send_data(conn: socket.socket, data) -> bool:
         conn.sendall(struct.pack('>I', len(serialized)) + serialized)
         return True
     except Exception as e:
-        print(f"[ERROR] send_data: {e}")
+        print(f"[ОШИБКА] send_data: {e}")
         return False
 
 
@@ -56,7 +56,7 @@ def recv_data(conn: socket.socket, timeout: float = None):
 
         data_size = struct.unpack('>I', raw_size)[0]
         if data_size > 500 * 1024 * 1024:
-            print(f"[ERROR] Packet too large: {data_size} bytes")
+            print(f"[ОШИБКА] Слишком большой пакет: {data_size} байт")
             return None
 
         data = b''
@@ -68,10 +68,10 @@ def recv_data(conn: socket.socket, timeout: float = None):
 
         return pickle.loads(data)
     except socket.timeout:
-        print("[ERROR] recv_data: timeout")
+        print("[ОШИБКА] recv_data: таймаут")
         return None
     except Exception as e:
-        print(f"[ERROR] recv_data: {e}")
+        print(f"[ОШИБКА] recv_data: {e}")
         return None
     finally:
         if timeout:
@@ -79,32 +79,29 @@ def recv_data(conn: socket.socket, timeout: float = None):
 
 
 # =============================================================================
-# LED CONTROLLER
+# КОНТРОЛЛЕР ДИОДОВ
 # =============================================================================
 class LEDController:
     def __init__(self, simulate: bool = True):
         self.simulate = simulate
-        mode = "simulation" if simulate else "GPIO"
-        print(f"[INFO] LEDController initialized in {mode} mode")
+        режим = "симуляция" if simulate else "GPIO"
+        print(f"[INFO] LEDController инициализирован в режиме: {режим}")
 
     def render_pattern(self, pattern: np.ndarray, render_time: float = 0.5) -> bool:
         if self.simulate:
-            print(f"[INFO] Rendering pattern: "
-                  f"size={len(pattern)}  min={pattern.min()}  "
-                  f"max={pattern.max()}  mean={pattern.mean():.1f}")
+            print(f"[INFO] Отрисовка паттерна: "
+                  f"размер={len(pattern)}  мин={pattern.min()}  "
+                  f"макс={pattern.max()}  среднее={pattern.mean():.1f}")
             time.sleep(render_time)
-            print("[INFO] Pattern rendered.")
+            print("[INFO] Паттерн отрисован.")
         else:
-            # TODO: implement GPIO control
-            # TODO: implement GPIO control
-            # TODO: implement GPIO control
-            # e.g. set_led_colors(pattern.reshape(-1, 3))
+            # TODO: реализовать управление GPIO
             pass
         return True
 
 
 # =============================================================================
-# ENVIRONMENT CAMERA
+# КАМЕРА ОКРУЖЕНИЯ
 # =============================================================================
 class EnvironmentCamera:
     def __init__(self, simulate: bool = True,
@@ -117,36 +114,36 @@ class EnvironmentCamera:
         if simulate:
             for path in (img1_path, img2_path):
                 if not os.path.exists(path):
-                    print(f"[WARN] Creating placeholder image: {path}")
-                    cv2.imwrite(path, np.random.randint(0, 255, (720, 720, 3), dtype=np.uint8))
-            print("[INFO] EnvironmentCamera initialized in simulation mode")
+                    print(f"[ПРЕДУПРЕЖДЕНИЕ] Создаём тестовое изображение: {path}")
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    cv2.imwrite(path, np.random.randint(
+                        0, 255, (720, 720, 3), dtype=np.uint8))
+            print("[INFO] EnvironmentCamera инициализирована в режиме симуляции")
         else:
-            print("[INFO] EnvironmentCamera initialized with real cameras")
+            print("[INFO] EnvironmentCamera инициализирована с реальными камерами")
 
     def capture_images(self):
         if self.simulate:
             img1 = cv2.imread(self.img1_path)
             img2 = cv2.imread(self.img2_path)
             if img1 is None or img2 is None:
-                print("[ERROR] Failed to load environment images")
+                print("[ОШИБКА] Не удалось загрузить изображения окружения")
                 return None, None
             return img1, img2
-        # TODO
-        # TODO: implement real PiCamera capture
-        # TODO
+        # TODO: реализовать захват с реальной камеры
         return None, None
 
 
 # =============================================================================
-# SERVER
+# СЕРВЕР
 # =============================================================================
 def run_server():
     print("=" * 70)
-    print("RASPBERRY PI SERVER")
+    print("СЕРВЕР RASPBERRY PI / ORANGE PI")
     print("=" * 70)
 
-    led_controller = LEDController(simulate=False)
-    env_camera     = EnvironmentCamera(simulate=False)
+    led_controller = LEDController(simulate=True)
+    env_camera     = EnvironmentCamera(simulate=True)
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -155,64 +152,64 @@ def run_server():
         s.bind((ServerConfig.HOST, ServerConfig.PORT))
         s.listen(1)
 
-        print(f"[INFO] Listening on {ServerConfig.HOST}:{ServerConfig.PORT}")
-        print("[INFO] Waiting for client connection...")
+        print(f"[INFO] Слушаем {ServerConfig.HOST}:{ServerConfig.PORT}")
+        print("[INFO] Ожидание подключения клиента...")
 
         conn, addr = s.accept()
         with conn:
-            print(f"[INFO] Client connected: {addr}")
+            print(f"[INFO] Клиент подключён: {addr}")
             episode = 0
 
             try:
                 while True:
                     episode += 1
-                    print(f"\n[Episode {episode}]" + "-" * 50)
+                    print(f"\n[Эпизод {episode}]" + "-" * 50)
 
-                    # 1. Capture images
+                    # 1. Захват изображений
                     img1, img2 = env_camera.capture_images()
                     if img1 is None:
-                        print("[ERROR] Image capture failed. Stopping.")
+                        print("[ОШИБКА] Захват изображений не удался. Остановка.")
                         break
-                    print(f"[INFO] Images captured: {img1.shape}, {img2.shape}")
+                    print(f"[INFO] Изображения захвачены: {img1.shape}, {img2.shape}")
 
-                    # 2. Send images to client
+                    # 2. Отправка изображений клиенту
                     if not send_data(conn, (img1, img2)):
-                        print("[ERROR] Failed to send images.")
+                        print("[ОШИБКА] Не удалось отправить изображения.")
                         break
-                    print("[INFO] Images sent.")
+                    print("[INFO] Изображения отправлены.")
 
-                    # 3. Receive LED pattern
+                    # 3. Получение LED-паттерна
                     pattern = recv_data(conn, timeout=60)
                     if pattern is None:
-                        print("[ERROR] Did not receive LED pattern from client.")
+                        print("[ОШИБКА] Паттерн от клиента не получен.")
                         break
                     pattern_arr = np.array(pattern)
-                    print(f"[INFO] Pattern received: shape={pattern_arr.shape}  "
-                          f"min={pattern_arr.min()}  max={pattern_arr.max()}")
+                    print(f"[INFO] Паттерн получен: форма={pattern_arr.shape}  "
+                          f"мин={pattern_arr.min()}  макс={pattern_arr.max()}")
 
-                    # 4. Render pattern
+                    # 4. Отрисовка паттерна
                     success = led_controller.render_pattern(
                         pattern_arr,
                         render_time=ServerConfig.SIMULATE_LED_RENDER_TIME
                     )
 
-                    # 5. Send confirmation
+                    # 5. Отправка подтверждения
                     response = {
                         'rendered':  success,
                         'episode':   episode,
                         'timestamp': time.time(),
                     }
                     if not send_data(conn, response):
-                        print("[ERROR] Failed to send confirmation.")
+                        print("[ОШИБКА] Не удалось отправить подтверждение.")
                         break
-                    print(f"[INFO] Episode {episode} complete.")
+                    print(f"[INFO] Эпизод {episode} завершён.")
 
             except KeyboardInterrupt:
-                print("\n[INFO] Server stopped by user.")
+                print("\n[INFO] Сервер остановлен пользователем.")
             except Exception as e:
-                print(f"[ERROR] Server exception: {e}")
+                print(f"[ОШИБКА] Исключение на сервере: {e}")
             finally:
-                print("[INFO] Closing connection.")
+                print("[INFO] Закрытие соединения.")
 
 
 if __name__ == '__main__':

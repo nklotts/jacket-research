@@ -1,6 +1,6 @@
 """
-Visualization module — manages all OpenCV windows.
-Window positions are applied once on first display.
+Модуль визуализации — управляет всеми окнами OpenCV.
+Позиции окон применяются один раз при первом отображении.
 """
 
 import cv2
@@ -9,11 +9,11 @@ import numpy as np
 
 class Visualizer:
     """
-    Centralized manager for all OpenCV display windows.
+    Централизованный менеджер всех окон OpenCV.
 
-    Args:
-        window_positions: dict mapping window name to (x, y) screen position
-        delay:            cv2.waitKey delay in milliseconds
+    Аргументы:
+        window_positions: словарь {название окна: (x, y)} — позиции на экране
+        delay:            задержка cv2.waitKey в миллисекундах
     """
 
     def __init__(self, window_positions: dict, delay: int):
@@ -21,7 +21,6 @@ class Visualizer:
         self.delay            = delay
         self._positioned: set = set()
 
-    # -------------------------------------------------------------------------
     def _show(self, name: str, img: np.ndarray):
         cv2.imshow(name, img)
         self._move_once(name)
@@ -40,47 +39,43 @@ class Visualizer:
         cv2.destroyAllWindows()
 
     # -------------------------------------------------------------------------
-    # LED pattern
+    # LED паттерн
     # -------------------------------------------------------------------------
-    def show_led_pattern(self, pattern: np.ndarray, n_leds: int, max_brightness: int):
+    def show_led_pattern(self, action: np.ndarray, n_superpixels: int,
+                         max_brightness: int, superpixel_size: int = 1):
         """
-        Renders the LED pattern as a grid image.
-
-        Args:
-            pattern:        flat numpy array [N_LEDS * 3], values in [0, max_action]
-            n_leds:         number of LEDs
-            max_brightness: brightness ceiling in 0-255 range (for info display)
+        Отрисовать суперпиксельный LED-паттерн в виде сетки.
         """
         try:
-            arr       = np.array(pattern).reshape(-1, 3)
-            grid_size = int(np.ceil(np.sqrt(n_leds)))
+            arr       = np.array(action).reshape(-1, 3)
+            grid_size = int(np.ceil(np.sqrt(n_superpixels)))
 
             grid = np.zeros((grid_size, grid_size, 3), dtype=np.float32)
-            for i in range(min(n_leds, grid_size * grid_size)):
+            for i in range(min(n_superpixels, grid_size * grid_size)):
                 grid[i // grid_size, i % grid_size] = arr[i]
 
             display = cv2.resize(grid, (400, 400), interpolation=cv2.INTER_NEAREST)
             display = (display * 255).astype(np.uint8)
             display = cv2.cvtColor(display, cv2.COLOR_RGB2BGR)
 
-            real    = arr * 255
-            info    = np.zeros((80, 400, 3), dtype=np.uint8)
-            cv2.putText(info, f'LED Pattern  ({n_leds} LEDs)',
-                        (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            real = arr * 255
+            info = np.zeros((80, 400, 3), dtype=np.uint8)
             cv2.putText(info,
-                        f'Mean: {real.mean():.1f}   Max: {real.max():.1f}   '
-                        f'(limit={max_brightness})',
-                        (10, 62), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
+                        f'LED Pattern ({n_superpixels} superpixels, {superpixel_size}x{superpixel_size})',
+                        (8, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+            cv2.putText(info,
+                        f'Mean: {real.mean():.1f}   Max: {real.max():.1f}   limit={max_brightness}',
+                        (8, 62), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
 
             self._show('LED Pattern', np.vstack([info, display]))
         except Exception as e:
-            print(f"[WARN] LED pattern visualization failed: {e}")
+            print(f"[ПРЕДУПРЕЖДЕНИЕ] Ошибка визуализации паттерна: {e}")
 
     # -------------------------------------------------------------------------
-    # RPi camera images
+    # Камеры RPi
     # -------------------------------------------------------------------------
     def show_rpi_images(self, img1: np.ndarray, img2: np.ndarray):
-        """Display images from both RPi cameras in separate windows."""
+        """Отобразить изображения с обеих камер RPi в отдельных окнах."""
         cv2.imshow('RPi Camera 1', self._prepare_rpi(img1, 'RPi Camera 1'))
         self._move_once('RPi Camera 1')
         cv2.imshow('RPi Camera 2', self._prepare_rpi(img2, 'RPi Camera 2'))
@@ -102,20 +97,12 @@ class Visualizer:
         return display
 
     # -------------------------------------------------------------------------
-    # YOLO detection
+    # YOLO детекция
     # -------------------------------------------------------------------------
-    def show_yolo(
-        self,
-        frame: np.ndarray,
-        person_boxes: list,
-        person_confidences: list,
-        max_confidence: float,
-    ) -> np.ndarray:
+    def show_yolo(self, frame: np.ndarray, person_boxes: list,
+                  person_confidences: list, max_confidence: float) -> np.ndarray:
         """
-        Draws person bounding boxes and detection status on the frame.
-
-        Returns:
-            Annotated frame as np.ndarray
+        Нарисовать боксы вокруг людей и статус детекции на кадре.
         """
         vis = frame.copy()
 
@@ -123,30 +110,24 @@ class Visualizer:
             x1, y1, x2, y2 = map(int, box)
             color = (int(255 * (1 - conf)), int(255 * (1 - conf)), int(255 * conf))
             cv2.rectangle(vis, (x1, y1), (x2, y2), color, 3)
-
             label = f'Person: {conf:.2%}'
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
             cv2.rectangle(vis, (x1, y1 - th - 10), (x1 + tw + 10, y1), color, -1)
             cv2.putText(vis, label, (x1 + 5, y1 - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
-        # Header bar
-        header = (f'Max Detection: {max_confidence:.2%} | '
-                  f'Persons: {len(person_confidences)}')
-        cv2.rectangle(vis, (10, 10), (660, 62), (0, 0, 0), -1)
-        cv2.putText(vis, header, (20, 46),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+        cv2.rectangle(vis, (10, 10), (700, 62), (0, 0, 0), -1)
+        cv2.putText(vis,
+                    f'Max detection: {max_confidence:.2%} | Persons: {len(person_confidences)}',
+                    (20, 46), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
 
-        # Status label
         if max_confidence < 0.3:
-            status_color, status_text = (0, 200, 0),   'LOW DETECTION'
+            sc, st = (0, 200, 0),   'LOW DETECTION'
         elif max_confidence < 0.6:
-            status_color, status_text = (0, 165, 255), 'MED DETECTION'
+            sc, st = (0, 165, 255), 'MED DETECTION'
         else:
-            status_color, status_text = (0, 0, 220),   'HIGH DETECTION'
-
-        cv2.putText(vis, status_text, (20, 95),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, status_color, 2)
+            sc, st = (0, 0, 220),   'HIGH DETECTION'
+        cv2.putText(vis, st, (20, 95), cv2.FONT_HERSHEY_SIMPLEX, 1.0, sc, 2)
 
         self._show('YOLO Detection - Adversarial Jacket', vis)
         return vis

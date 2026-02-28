@@ -1,6 +1,6 @@
 """
-SAC Actor (stochastic policy network).
-Produces LED pattern actions in the range [0, max_action] via sigmoid + clamp.
+SAC Actor (стохастическая сеть политики).
+Генерирует LED-паттерн в диапазоне [0, max_action] через sigmoid + clamp.
 """
 
 import torch
@@ -10,25 +10,20 @@ from torch.distributions import Normal
 
 class Actor(nn.Module):
     """
-    Stochastic actor for Soft Actor-Critic.
+    Стохастический актор для Soft Actor-Critic.
 
-    Args:
-        state_dim:   input state dimensionality
-        action_dim:  output action dimensionality (N_LEDS * 3)
-        hidden_dims: list of hidden layer sizes
-        max_action:  upper bound of the action range (e.g. 196/255)
+    Аргументы:
+        state_dim:   размерность входного состояния
+        action_dim:  размерность действия (n_superpixels * 3)
+        hidden_dims: список размеров скрытых слоёв
+        max_action:  верхняя граница действия (например, 196/255)
     """
 
     LOG_STD_MIN = -20
     LOG_STD_MAX = 2
 
-    def __init__(
-        self,
-        state_dim: int,
-        action_dim: int,
-        hidden_dims: list,
-        max_action: float,
-    ):
+    def __init__(self, state_dim: int, action_dim: int,
+                 hidden_dims: list, max_action: float):
         super().__init__()
         self.max_action = max_action
 
@@ -42,6 +37,8 @@ class Actor(nn.Module):
         self.mean_linear    = nn.Linear(prev, action_dim)
         self.log_std_linear = nn.Linear(prev, action_dim)
 
+        nn.init.constant_(self.mean_linear.bias, 0)
+
     def forward(self, state: torch.Tensor):
         x       = self.encoder(state)
         mean    = self.mean_linear(x)
@@ -49,21 +46,21 @@ class Actor(nn.Module):
         return mean, log_std
 
     def sample(self, state: torch.Tensor):
-        """Sample action with reparameterization trick (used during training)."""
+        """Сэмплирование действия с reparameterization trick (используется при обучении)."""
         mean, log_std = self.forward(state)
         std    = log_std.exp()
         normal = Normal(mean, std)
         x_t    = normal.rsample()
         action = torch.sigmoid(x_t).clamp(0.0, self.max_action)
 
-        # Log-probability with sigmoid correction
+        # Логарифм вероятности с поправкой на sigmoid
         log_prob  = normal.log_prob(x_t)
         log_prob -= torch.log(action * (1.0 - action) + 1e-6)
         log_prob  = log_prob.sum(dim=-1, keepdim=True)
         return action, log_prob
 
     def get_action(self, state: torch.Tensor, deterministic: bool = False) -> torch.Tensor:
-        """Get action for inference (no gradient computation required)."""
+        """Получить действие для инференса (без вычисления градиентов)."""
         mean, log_std = self.forward(state)
         if deterministic:
             return torch.sigmoid(mean).clamp(0.0, self.max_action)

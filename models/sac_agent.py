@@ -1,5 +1,6 @@
 """
-SAC Agent — combines Actor, Critic, ReplayBuffer and the update logic.
+SAC Агент — объединяет Actor, Critic, ReplayBuffer и логику обновления.
+Включает клиппинг градиентов для стабильности обучения.
 """
 
 import numpy as np
@@ -14,19 +15,20 @@ from utils.replay_buffer import ReplayBuffer
 
 class SACAgent:
     """
-    Soft Actor-Critic agent.
+    Soft Actor-Critic агент.
 
-    Args:
-        state_dim:  state dimensionality
-        action_dim: action dimensionality
+    Аргументы:
+        state_dim:  размерность состояния
+        action_dim: размерность действия
         device:     torch.device
-        cfg:        TrainingConfig instance
+        cfg:        экземпляр TrainingConfig
     """
 
     def __init__(self, state_dim: int, action_dim: int, device: torch.device, cfg):
-        self.device = device
-        self.gamma  = cfg.GAMMA
-        self.tau    = cfg.TAU
+        self.device    = device
+        self.gamma     = cfg.GAMMA
+        self.tau       = cfg.TAU
+        self.grad_clip = cfg.GRAD_CLIP_NORM
 
         max_action = cfg.MAX_BRIGHTNESS / 255.0
 
@@ -48,20 +50,18 @@ class SACAgent:
     def alpha(self) -> torch.Tensor:
         return self.log_alpha.exp()
 
-    # -------------------------------------------------------------------------
     def select_action(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
         with torch.no_grad():
             t      = torch.FloatTensor(state).unsqueeze(0).to(self.device)
             action = self.actor.get_action(t, deterministic)
         return action.cpu().numpy()[0]
 
-    # -------------------------------------------------------------------------
     def update(self, batch_size: int):
         """
-        Sample a batch from the replay buffer and update all networks.
+        Сэмплировать батч и обновить все сети.
 
-        Returns:
-            (critic_loss, actor_loss, alpha_loss) or (None, None, None) if buffer too small
+        Возвращает:
+            (critic_loss, actor_loss, alpha_loss) или (None, None, None) если буфер мал
         """
         if len(self.replay_buffer) < batch_size:
             return None, None, None
@@ -74,7 +74,7 @@ class SACAgent:
         next_states = torch.FloatTensor(np.array(next_states)).to(self.device)
         dones       = torch.FloatTensor(np.array(dones)).unsqueeze(1).to(self.device)
 
-        # -- Critic update --
+        # -- Обновление Critic --
         with torch.no_grad():
             next_actions, next_log_probs = self.actor.sample(next_states)
             q1_next, q2_next = self.critic_target(next_states, next_actions)
@@ -85,43 +85,44 @@ class SACAgent:
         critic_loss = F.mse_loss(q1, q_target) + F.mse_loss(q2, q_target)
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+        if self.grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.grad_clip)
         self.critic_optimizer.step()
 
-        # -- Actor update --
+        # -- Обновление Actor --
         new_actions, log_probs = self.actor.sample(states)
         q1_new, q2_new = self.critic(states, new_actions)
         actor_loss = (self.alpha * log_probs - torch.min(q1_new, q2_new)).mean()
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
+        if self.grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.grad_clip)
         self.actor_optimizer.step()
 
-        # -- Alpha (entropy coefficient) update --
+        # -- Обновление Alpha (коэффициент энтропии) --
         alpha_loss = -(self.log_alpha * (log_probs + self.target_entropy).detach()).mean()
         self.alpha_optimizer.zero_grad()
         alpha_loss.backward()
         self.alpha_optimizer.step()
 
-        # -- Soft update of target critic --
+        # -- Мягкое обновление целевого Critic --
         for p, tp in zip(self.critic.parameters(), self.critic_target.parameters()):
             tp.data.copy_(self.tau * p.data + (1 - self.tau) * tp.data)
 
         return critic_loss.item(), actor_loss.item(), alpha_loss.item()
 
-    # -------------------------------------------------------------------------
     def save(self, path: str, episode: int,
-             episode_rewards: list, episode_detections: list,
-             encoder_proj_state=None):
+             episode_rewards: list, episode_detections: list):
         torch.save({
-            'episode':                     episode,
-            'actor_state_dict':            self.actor.state_dict(),
-            'critic_state_dict':           self.critic.state_dict(),
-            'critic_target_state_dict':    self.critic_target.state_dict(),
-            'actor_optimizer_state_dict':  self.actor_optimizer.state_dict(),
-            'critic_optimizer_state_dict': self.critic_optimizer.state_dict(),
-            'log_alpha':                   self.log_alpha,
-            'encoder_proj_state_dict':     encoder_proj_state,
-            'episode_rewards':             episode_rewards,
-            'episode_detections':          episode_detections,
+            'эпизод':                          episode,
+            'actor_state_dict':                self.actor.state_dict(),
+            'critic_state_dict':               self.critic.state_dict(),
+            'critic_target_state_dict':        self.critic_target.state_dict(),
+            'actor_optimizer_state_dict':      self.actor_optimizer.state_dict(),
+            'critic_optimizer_state_dict':     self.critic_optimizer.state_dict(),
+            'log_alpha':                       self.log_alpha,
+            'награды_по_эпизодам':             episode_rewards,
+            'детекции_по_эпизодам':            episode_detections,
         }, path)
 
     def load(self, path: str) -> dict:

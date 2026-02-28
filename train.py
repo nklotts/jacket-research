@@ -1,5 +1,13 @@
 """
-Training loop for SAC-based adversarial LED pattern optimization.
+Основной цикл обучения SAC для оптимизации adversarial LED-паттернов.
+
+Стратегия исследования:
+  1. Шум на состояние: гауссовский шум добавляется к состоянию ДО подачи в актор.
+                       Заставляет политику исследовать разнообразные паттерны.
+  2. Шум на действие:  малый гауссовский шум добавляется к выходу актора.
+                       Обеспечивает тонкую пертурбацию вокруг среднего политики.
+
+Оба параметра задаются через STATE_NOISE_STD и ACTION_NOISE_STD в конфиге.
 """
 
 import json
@@ -12,67 +20,110 @@ import torch
 
 from config import TrainingConfig as cfg
 from env import AdversarialJacketEnv
-from models import ImageEncoder, SACAgent
+from models import SACAgent
 
 
+# =============================================================================
+# ЛОГИРОВАНИЕ
+# =============================================================================
+def _print_config():
+    """Вывести все параметры конфига в консоль."""
+    print("\n" + "=" * 70)
+    print("ПАРАМЕТРЫ ЭКСПЕРИМЕНТА")
+    print("=" * 70)
+    for key, val in sorted(vars(cfg).items()):
+        if not key.startswith('_'):
+            print(f"  {key} = {val}")
+    print("=" * 70 + "\n")
+
+
+def _write_config_header(log_file: str):
+    """Записать все параметры конфига в начало лог-файла."""
+    with open(log_file, 'w') as f:
+        f.write("=" * 70 + "\n")
+        f.write("ПАРАМЕТРЫ ЭКСПЕРИМЕНТА\n")
+        f.write("=" * 70 + "\n")
+        for key, val in sorted(vars(cfg).items()):
+            if not key.startswith('_'):
+                f.write(f"{key} = {val}\n")
+        f.write("=" * 70 + "\n")
+        f.write("эпизод,награда,детекция,avg100_награда,avg100_детекция,"
+                "critic_loss,actor_loss,alpha_loss\n")
+
+
+# =============================================================================
+# ОБУЧЕНИЕ
+# =============================================================================
 def train():
     os.makedirs(cfg.MODELS_DIR, exist_ok=True)
     os.makedirs(cfg.LOGS_DIR,   exist_ok=True)
     if cfg.SAVE_DATASET:
         os.makedirs(cfg.DATASET_DIR, exist_ok=True)
 
+    # Вывод конфига в консоль
+    _print_config()
+
     device = torch.device(cfg.DEVICE if torch.cuda.is_available() else 'cpu')
-    print(f"[INFO] Device: {device}")
+    print(f"[INFO] Устройство: {device}")
 
-    # -- Encoder --
-    print("[INFO] Loading MobileNetV2 encoder...")
-    encoder = ImageEncoder(output_dim=cfg.ENCODER_DIM, freeze=cfg.ENCODER_FREEZE).to(device)
-    encoder.eval()
-    print(f"[INFO] Encoder ready. state_dim = {cfg.ENCODER_DIM} x 2 = {cfg.ENCODER_DIM * 2}")
-
-    # -- Environment --
-    env = AdversarialJacketEnv(cfg, encoder=encoder)
+    # -- Окружение --
+    env = AdversarialJacketEnv(cfg)
     if not env.connect_to_rpi():
-        print("[ERROR] Failed to connect to RPi. Aborting.")
+        print("[ОШИБКА] Не удалось подключиться к RPi. Завершение.")
         return
 
-    state_dim  = cfg.ENCODER_DIM * 2
-    action_dim = cfg.N_LEDS * 3
-    print(f"[INFO] state_dim={state_dim}, action_dim={action_dim}")
+    state_dim  = env.state_dim
+    action_dim = env.action_dim
 
-    # -- Agent --
-    print("[INFO] Initializing SAC agent...")
+    # -- Агент --
+    print("[INFO] Инициализация SAC агента...")
     agent = SACAgent(state_dim, action_dim, device, cfg)
-    print("[INFO] SAC agent ready.")
+    print("[INFO] SAC агент готов.")
 
     episode_rewards    = []
     episode_detections = []
+    last_critic_loss   = None
+    last_actor_loss    = None
+    last_alpha_loss    = None
+
     log_file = os.path.join(
         cfg.LOGS_DIR,
-        f'training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+        f'обучение_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
     )
+    _write_config_header(log_file)
 
-    print("\n" + "=" * 70)
-    print("TRAINING START")
+    print("=" * 70)
+    print("НАЧАЛО ОБУЧЕНИЯ")
     print("=" * 70 + "\n")
 
     state, raw_images = env.reset()
     if state is None:
-        print("[ERROR] Failed to obtain initial state. Aborting.")
+        print("[ОШИБКА] Не удалось получить начальное состояние. Завершение.")
         return
 
     for episode in range(1, cfg.NUM_EPISODES + 1):
-        print(f"\n[Episode {episode:05d}/{cfg.NUM_EPISODES}]" + "-" * 40)
+        print(f"\n[Эпизод {episode:05d}/{cfg.NUM_EPISODES}]" + "-" * 40)
 
         episode_reward    = 0.0
         episode_detection = 0.0
 
         for step in range(cfg.MAX_STEPS_PER_EPISODE):
-            action = agent.select_action(state)
+
+            # -- Шум на состояние: добавляем ДО подачи в актор --
+            noisy_state = state + np.random.normal(0, cfg.STATE_NOISE_STD, size=state.shape)
+
+            # -- Выбор действия из зашумлённого состояния --
+            action = agent.select_action(noisy_state)
+
+            # -- Шум на действие: малая пертурбация ПОСЛЕ выхода актора --
+            if cfg.ACTION_NOISE_STD > 0:
+                action = action + np.random.normal(0, cfg.ACTION_NOISE_STD, size=action.shape)
+                action = np.clip(action, 0.0, cfg.MAX_BRIGHTNESS / 255.0)
 
             reward, done, info = env.step(action, episode=episode, step_num=step)
-            if info is None:
-                print("[ERROR] Step failed.")
+
+            if done and not info:
+                print("[ОШИБКА] Шаг завершился неудачей.")
                 break
 
             episode_detection  = info['detection_confidence']
@@ -80,58 +131,63 @@ def train():
 
             next_state, raw_images = env.reset()
             if next_state is None:
-                print("[ERROR] Failed to obtain next state.")
+                print("[ОШИБКА] Не удалось получить следующее состояние.")
                 done = True
                 break
 
+            # В буфер кладём чистое состояние (без шума)
             agent.replay_buffer.push(state, action, reward, next_state, done)
 
             if done:
                 break
 
             if len(agent.replay_buffer) >= cfg.LEARNING_STARTS:
-                critic_loss, actor_loss, alpha_loss = agent.update(cfg.BATCH_SIZE)
-                if critic_loss is not None and cfg.VERBOSE:
-                    print(f"  [TRAIN] critic={critic_loss:.4f}  "
-                          f"actor={actor_loss:.4f}  alpha={alpha_loss:.4f}")
+                c_loss, a_loss, al_loss = agent.update(cfg.BATCH_SIZE)
+                if c_loss is not None:
+                    last_critic_loss = c_loss
+                    last_actor_loss  = a_loss
+                    last_alpha_loss  = al_loss
+                    if cfg.VERBOSE:
+                        print(f"  [ОБУЧЕНИЕ] critic={c_loss:.4f}  "
+                              f"actor={a_loss:.4f}  alpha={al_loss:.4f}")
 
             if cfg.SAVE_DATASET and raw_images is not None:
-                _save_dataset_step(
-                    episode, step, raw_images, info, action,
-                    episode_detection, reward, env
-                )
+                _save_dataset_step(episode, step, raw_images, info, action,
+                                   episode_detection, reward, env)
 
             state = next_state
-            print(f"  [Step {step+1}] reward={reward:.4f}  detection={episode_detection:.4f}")
+            print(f"  [Шаг {step + 1}] награда={reward:.4f}  детекция={episode_detection:.4f}")
 
         episode_rewards.append(episode_reward)
         episode_detections.append(episode_detection)
         avg_r = np.mean(episode_rewards[-100:])
         avg_d = np.mean(episode_detections[-100:])
 
-        print(f"  reward={episode_reward:.4f}  detection={episode_detection:.4f}  "
-              f"avg100_reward={avg_r:.4f}  avg100_detection={avg_d:.4f}  "
-              f"buffer={len(agent.replay_buffer)}")
+        print(f"  награда={episode_reward:.4f}  детекция={episode_detection:.4f}  "
+              f"avg100_награда={avg_r:.4f}  avg100_детекция={avg_d:.4f}  "
+              f"буфер={len(agent.replay_buffer)}")
 
         if episode % cfg.SAVE_MODEL_EVERY == 0:
-            path = os.path.join(cfg.MODELS_DIR, f'sac_episode_{episode:05d}.pth')
-            agent.save(path, episode, episode_rewards, episode_detections,
-                       encoder_proj_state=encoder.proj.state_dict())
-            print(f"[INFO] Checkpoint saved: {path}")
+            path = os.path.join(cfg.MODELS_DIR, f'sac_эпизод_{episode:05d}.pth')
+            agent.save(path, episode, episode_rewards, episode_detections)
+            print(f"[INFO] Чекпоинт сохранён: {path}")
 
+        cl  = f"{last_critic_loss:.4f}" if last_critic_loss is not None else "н/д"
+        al  = f"{last_actor_loss:.4f}"  if last_actor_loss  is not None else "н/д"
+        all_ = f"{last_alpha_loss:.4f}" if last_alpha_loss  is not None else "н/д"
         with open(log_file, 'a') as f:
             f.write(f"{episode},{episode_reward:.4f},{episode_detection:.4f},"
-                    f"{avg_r:.4f},{avg_d:.4f}\n")
+                    f"{avg_r:.4f},{avg_d:.4f},{cl},{al},{all_}\n")
 
     env.close()
     print("\n" + "=" * 70)
-    print("TRAINING COMPLETE")
+    print("ОБУЧЕНИЕ ЗАВЕРШЕНО")
     print("=" * 70)
 
 
 def _save_dataset_step(episode, step, raw_images, info, action, detection, reward, env):
-    """Save images and metadata for a single training step."""
-    ep_dir = os.path.join(cfg.DATASET_DIR, f'episode_{episode:05d}')
+    """Сохранить изображения и метаданные для одного шага обучения."""
+    ep_dir = os.path.join(cfg.DATASET_DIR, f'эпизод_{episode:05d}')
     os.makedirs(ep_dir, exist_ok=True)
 
     cv2.imwrite(os.path.join(ep_dir, 'env_img1.jpg'), raw_images[0])
@@ -142,15 +198,16 @@ def _save_dataset_step(episode, step, raw_images, info, action, detection, rewar
         cv2.imwrite(os.path.join(ep_dir, 'yolo_detection.jpg'), env.last_visualization)
 
     metadata = {
-        'episode':              episode,
-        'step':                 step,
-        'detection_confidence': float(detection),
-        'reward':               float(reward),
-        'action_mean':          float(action.mean()),
-        'action_std':           float(action.std()),
+        'эпизод':              episode,
+        'шаг':                 step,
+        'уверенность_детекции': float(detection),
+        'награда':             float(reward),
+        'среднее_действия':    float(action.mean()),
+        'std_действия':        float(action.std()),
+        'размер_суперпикселя': cfg.SUPERPIXEL_SIZE,
     }
-    with open(os.path.join(ep_dir, 'metadata.json'), 'w') as f:
-        json.dump(metadata, f, indent=2)
+    with open(os.path.join(ep_dir, 'метаданные.json'), 'w', encoding='utf-8') as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
 
 
 if __name__ == '__main__':

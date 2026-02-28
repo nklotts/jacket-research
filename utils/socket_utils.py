@@ -1,6 +1,6 @@
 """
-Reliable TCP socket utilities.
-Protocol: 4-byte big-endian payload length followed by pickle-serialized data.
+Утилиты для надёжной передачи данных по TCP.
+Протокол: 4 байта big-endian (длина полезной нагрузки) + pickle-сериализованные данные.
 """
 
 import pickle
@@ -9,27 +9,27 @@ import struct
 
 
 def send_data(sock: socket.socket, data) -> bool:
-    """Serialize and send data over a TCP socket. Returns True on success."""
+    """Сериализовать и отправить данные через TCP сокет. Возвращает True при успехе."""
     try:
         serialized = pickle.dumps(data)
         size       = struct.pack('>I', len(serialized))
         sock.sendall(size + serialized)
         return True
     except Exception as e:
-        print(f"[ERROR] send_data: {e}")
+        print(f"[ОШИБКА] send_data: {e}")
         return False
 
 
 def recv_data(sock: socket.socket, timeout: float = None):
     """
-    Receive and deserialize data from a TCP socket.
+    Принять и десериализовать данные из TCP сокета.
 
-    Args:
-        sock:    connected socket
-        timeout: read timeout in seconds (None = blocking)
+    Аргументы:
+        sock:    подключённый сокет
+        timeout: таймаут чтения в секундах (None = блокирующий)
 
-    Returns:
-        Deserialized object, or None on error / timeout
+    Возвращает:
+        Десериализованный объект или None при ошибке / таймауте
     """
     if timeout is not None:
         sock.settimeout(timeout)
@@ -45,7 +45,7 @@ def recv_data(sock: socket.socket, timeout: float = None):
         data_size = struct.unpack('>I', raw_size)[0]
 
         if data_size > 500 * 1024 * 1024:
-            print(f"[ERROR] recv_data: packet too large ({data_size} bytes)")
+            print(f"[ОШИБКА] recv_data: слишком большой пакет ({data_size} байт)")
             return None
 
         data = b''
@@ -58,10 +58,10 @@ def recv_data(sock: socket.socket, timeout: float = None):
         return pickle.loads(data)
 
     except socket.timeout:
-        print("[ERROR] recv_data: timeout")
+        print("[ОШИБКА] recv_data: таймаут")
         return None
     except Exception as e:
-        print(f"[ERROR] recv_data: {e}")
+        print(f"[ОШИБКА] recv_data: {e}")
         return None
     finally:
         if timeout is not None:

@@ -1,5 +1,5 @@
 """
-Experience replay buffer for SAC training.
+Буфер воспроизведения опыта для обучения SAC.
 """
 
 import random
@@ -8,10 +8,10 @@ from collections import deque
 
 class ReplayBuffer:
     """
-    Fixed-capacity circular buffer storing (s, a, r, s', done) transitions.
+    Кольцевой буфер фиксированной ёмкости, хранящий переходы (s, a, r, s', done).
 
-    Args:
-        capacity: maximum number of transitions to store
+    Аргументы:
+        capacity: максимальное количество хранимых переходов
     """
 
     def __init__(self, capacity: int):

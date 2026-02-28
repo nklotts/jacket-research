@@ -1,5 +1,5 @@
 """
-SAC Critic — twin Q-networks for clipped double Q-learning.
+SAC Critic — две Q-сети для clipped double Q-learning.
 """
 
 import torch
@@ -8,12 +8,12 @@ import torch.nn as nn
 
 class Critic(nn.Module):
     """
-    Two independent Q-networks for Soft Actor-Critic.
+    Две независимые Q-сети для Soft Actor-Critic.
 
-    Args:
-        state_dim:   state dimensionality
-        action_dim:  action dimensionality
-        hidden_dims: list of hidden layer sizes
+    Аргументы:
+        state_dim:   размерность состояния
+        action_dim:  размерность действия
+        hidden_dims: список размеров скрытых слоёв
     """
 
     def __init__(self, state_dim: int, action_dim: int, hidden_dims: list):
